@@ -1,0 +1,25 @@
+cff-version: 1.2.0
+message: "If you use this code, please cite the paper below."
+title: "conditional-normative-pet: conditional normative modeling of whole-body FDG PET/CT"
+version: 1.0.0
+date-released: 2026-11-12
+license: MIT
+repository-code: "https://github.com/hauin/conditional-normative-pet"
+authors:
+  - family-names: Park
+    given-names: Chang-hyun
+    affiliation: "Yonsei University"
+  - family-names: Park
+    given-names: Hae-Jeong
+    affiliation: "Yonsei University"
+preferred-citation:
+  type: article
+  title: "Conditional normative modeling of whole-body FDG PET/CT: inter-organ relationships outperform reference-region normalization for label-free detection of lesion-bearing organs"
+  authors:
+    - family-names: Park
+      given-names: Chang-hyun
+    - family-names: Park
+      given-names: Hae-Jeong
+  journal: "medRxiv"
+  year: 2026
+  # doi: 10.1101/XXXX.XX.XX.XXXXXXXX   (add after posting)
