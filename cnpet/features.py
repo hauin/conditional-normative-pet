@@ -85,8 +85,10 @@ def segment_study(study_dir: Path, out_dir: Path, device: str = "gpu") -> Path:
 
 
 # ------------------------------------------------------------------ organ statistics
-def organ_features(study_dir: Path, groups_path: Path) -> tuple[list[dict], dict]:
-    """Organ-level SUV statistics and study QC for one study."""
+def organ_features(study_dir: Path, groups_path: Path, names: list[str] | None = None) -> tuple[list[dict], dict]:
+    """Organ-level SUV statistics and study QC for one study. `names` gives the unit name of each
+    label 1..N of the label map (default: the organ groups of config.GROUP_RULES)."""
+    names = names or C.GROUP_NAMES
     groups, img = load_nii(groups_path)
     groups = groups.astype(np.int16)
     suv = load_nii(study_dir / "SUV.nii.gz")[0].astype(np.float32)
@@ -100,9 +102,9 @@ def organ_features(study_dir: Path, groups_path: Path) -> tuple[list[dict], dict
     rows, qc = [], {"study_id": sid, "lesion_ml": float(seg.sum() * vml)}
     in_any = np.zeros(groups.shape, bool)
     for gid, sl in enumerate(ndi.find_objects(groups), start=1):
-        if sl is None or gid > len(C.GROUP_NAMES):
+        if sl is None or gid > len(names):
             continue
-        name = C.GROUP_NAMES[gid - 1]
+        name = names[gid - 1]
         pad = tuple(slice(max(s.start - 3, 0), min(s.stop + 3, n)) for s, n in zip(sl, groups.shape))
         m = groups[pad] == gid
         in_any[pad] |= m
