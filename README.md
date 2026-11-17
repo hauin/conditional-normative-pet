@@ -2,7 +2,7 @@
 
 Code for the paper
 
-> Park C-h, Park H-J. *Conditional normative modeling of whole-body FDG PET/CT: inter-organ relationships outperform reference-region normalization for label-free detection of lesion-bearing organs.* medRxiv (2026).
+> Park C-h, Park H-J. *Conditional normative modeling of whole-body FDG PET/CT: inter-organ relationships outperform reference-region normalization for label-free detection of lesion-bearing organs.* medRxiv (2026). doi: (to be added)
 
 Clinical reading criteria judge an organ's FDG uptake against a single reference region, such as the liver or the blood pool. This repository implements a normative model that predicts each organ's uptake from the patient's age, sex and the uptake of the patient's other organs. The model is trained on control patients without lesion labels, and each organ is scored as a calibrated deviation from that expectation. Liver and blood-pool referencing are special cases: a regression on one organ with the slope fixed at one.
 
@@ -18,6 +18,7 @@ This is a concise implementation of the core analysis. The modeling and scoring 
 | Inter-organ relationships: partial correlations; out-of-fold R² of predictor sets M0, M1, M2c, M2 | 2.3 | `cnpet/relations.py` |
 | Deviation scores: SUVmax, liver- and blood-pool-referenced, marginal, conditional (ridge or gradient boosting), with or without the aleatoric variance model; compartment masking; out-of-fold scaling | 2.4 | `cnpet/model.py` |
 | Detection (AUC, FPR at 90% sensitivity, patient-level bootstrap CI of ΔAUC), per-organ AUC, calibration, repeat-scan metrics | 2.5, 2.8 | `cnpet/evaluate.py` |
+| Finer organ units: unit maps (mid, fine), compartment and sibling masking, Šidák-corrected parent-organ scores | 2.10 | `cnpet/granularity.py` |
 
 Command-line options of `scripts/run_analysis.py` cover the sensitivity analyses of Section 2.6: lesion threshold, compartment masking, training population and target. The other secondary analyses use the same scoring function with different inputs:
 - residual soft-tissue regions are extra rows in the organ table;
