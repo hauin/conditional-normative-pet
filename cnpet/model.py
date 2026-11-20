@@ -5,12 +5,20 @@ Every method turns the log target y_io of organ o in patient i into a standardiz
     z_io = (y_io - mu_o(x_i,-o)) / (k_o * sigma_o(x_i,-o))                       (1)
 
   raw          mu = training-control mean, sigma = SD                      (SUVmax)
-  liver_ref    y - log(liver clean mean), standardized on controls          (slope fixed at 1)
-  blood_ref    y - log(aortic clean mean), standardized on controls
-  marg_lin     ridge on age and sex                                         (marginal normative)
-  cond_lin     ridge on age, sex and the other organs, own compartment hidden (conditional)
+  liver_ref    y - log(liver mean), standardized on controls                (slope fixed at 1)
+  blood_ref    y - log(aortic mean), standardized on controls
+  marg_lin     ridge regression on age and sex                              (marginal normative)
+  glob_ref     y - mean log uptake of the other organs, standardized        (global uptake, slope 1)
+  glob_lin     ridge regression on age, sex and that global uptake          (global uptake, M1)
+  cond_lin     ridge regression on age, sex and the other organs, own compartment hidden (M2c)
+  cond_M2      cond_lin without compartment masking                         (M2)
   cond_lin_het cond_lin divided by a patient-specific aleatoric SD           (variance model)
   cond_gbm / cond_het   the same with histogram gradient boosting
+
+Ridge regression is the primary model: the predictors (other organs) are many and strongly
+correlated, and the penalty stabilizes their weights while keeping a linear model whose
+coefficients generalize the single fixed weight of reference-region normalization. Gradient
+boosting is the non-linear alternative.
 
 All scores are out-of-fold: patients are split into 5 folds and models are fitted on the
 control organs of the training folds only. An inner 5-fold split of the training data gives
@@ -28,12 +36,13 @@ from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
 from . import config as C
-from .data import Cohort
+from .data import Cohort, global_uptake
 
 REF_METHODS = ("raw", "liver_ref", "blood_ref")
-LINEAR = ("marg_lin", "cond_lin", "cond_lin_het")
+LINEAR = ("marg_lin", "glob_lin", "cond_lin", "cond_M2", "cond_lin_het")
 HETERO = ("cond_lin_het", "cond_het")
-METHODS = ["raw", "liver_ref", "blood_ref", "marg_lin", "cond_lin", "cond_lin_het", "cond_gbm", "cond_het"]
+METHODS = ["raw", "liver_ref", "blood_ref", "marg_lin", "glob_ref", "glob_lin", "cond_lin", "cond_M2",
+           "cond_lin_het", "cond_gbm", "cond_het"]
 
 
 def ridge():
@@ -78,8 +87,11 @@ def design(o: str, method: str, d: Cohort, train_ctrl, compartment_mask: bool = 
         cov[extra] = cov[extra].clip(lower=c.quantile(0.01), upper=c.quantile(0.99), axis=1).fillna(c.median())
     if method == "marg_lin":
         return cov
+    if method == "glob_lin":
+        X = pd.concat([cov, global_uptake(d, o).rename("global")], axis=1)
+        return X.fillna(X.loc[train_ctrl].median())
     hide = {o}
-    if compartment_mask and o in d.organ_system:
+    if compartment_mask and method != "cond_M2" and o in d.organ_system:
         hide |= set(d.systems[d.organ_system[o]])
     P = d.P[[c for c in d.P.columns if c not in hide]]
     P = P.fillna(P.loc[train_ctrl].median())
@@ -99,8 +111,8 @@ def score_organ(o, method, d: Cohort, train_idx, test_idx, *, train="controls", 
         & y.loc[tr].notna().values
     if base.sum() < C.MIN_TRAIN:
         return z, alea
-    if method in REF_METHODS:
-        r = d.refs[method].get(o)
+    if method in REF_METHODS or method == "glob_ref":
+        r = global_uptake(d, o) if method == "glob_ref" else d.refs[method].get(o)
         if r is None:
             return z, alea
         s = y - r
@@ -149,3 +161,15 @@ def oof_scores(d: Cohort, methods=METHODS, n_jobs: int = 1, **kw) -> pd.DataFram
     lm = d.lesion_ml.stack().rename("lesion_ml").reset_index()
     lm.columns = ["study_id", "organ", "lesion_ml"]
     return Z.merge(lm, on=["study_id", "organ"], how="left")
+
+
+def two_pass(d: Cohort, flag_z: float = C.FLAG_Z, n_jobs: int = 1) -> tuple[Cohort, pd.DataFrame]:
+    """Label-free two-pass procedure (Section 2.6): score each organ's input median from the other
+    organs (conditional linear, out of fold), hide predictor values with z > flag_z, and return a
+    cohort whose predictors are imputed in the second pass like any missing value."""
+    import copy
+    Zp = oof_scores(d, ["cond_lin"], n_jobs=n_jobs, T=d.P)
+    zp = Zp.pivot_table(index="study_id", columns="organ", values="z").reindex(index=d.studies, columns=d.P.columns)
+    d2 = copy.copy(d)
+    d2.P = d.P.mask(zp > flag_z)
+    return d2, zp

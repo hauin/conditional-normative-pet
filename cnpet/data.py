@@ -1,4 +1,8 @@
-"""Cohort assembly: study x organ matrices used by every analysis."""
+"""Cohort assembly: study x organ matrices used by every analysis.
+
+Lesion labels enter only through lesion_ml, which defines positives and negatives for evaluation
+and excludes lesion-bearing organs from training. With inputs='eroded' (default) the predictors
+and reference regions need no lesion labels."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -17,7 +21,7 @@ class Cohort:
     diagnosis: pd.Series
     patient_id: pd.Series
     covariates: pd.DataFrame     # age, sex (+ optional extra covariates)
-    P: pd.DataFrame              # log lesion-cleaned median SUV (predictors)
+    P: pd.DataFrame              # log median SUV of the other organs' input masks (predictors)
     T: pd.DataFrame              # log target (SUVmax on the full mask)
     lesion_ml: pd.DataFrame      # lesion volume per organ
     refs: dict = field(default_factory=dict)   # reference-region log uptake per method and organ
@@ -41,12 +45,15 @@ def _pivot(tab, studies, feature, n_col, cols=None):
 
 
 def load_cohort(manifest: pd.DataFrame, organ_stats: pd.DataFrame, *, target: str = C.TARGET,
-                extra_covariates: pd.DataFrame | None = None, followups: bool = False) -> Cohort:
+                inputs: str = C.INPUTS, extra_covariates: pd.DataFrame | None = None,
+                followups: bool = False) -> Cohort:
     """Build the analysis matrices.
 
     manifest     one row per study: study_id, patient_id, diagnosis, age, sex (0/1), first_study
     organ_stats  one row per study and organ, as written by features.organ_features
+    inputs       'eroded' (label-free, main analysis) or 'clean' (lesion-cleaned, needs lesion labels)
     """
+    assert inputs in ("eroded", "clean"), inputs
     man = manifest.set_index("study_id")
     have = man.index.isin(organ_stats.study_id.unique()) & man[["age", "sex"]].notna().all(axis=1).values
     first_flag = man.first_study.astype(bool).values
@@ -58,7 +65,7 @@ def load_cohort(manifest: pd.DataFrame, organ_stats: pd.DataFrame, *, target: st
     if extra_covariates is not None:
         cov = pd.concat([cov, extra_covariates.reindex(studies).astype(float)], axis=1)
 
-    P = _pivot(organ_stats, studies, C.PRED_FEATURE, "clean_n")
+    P = _pivot(organ_stats, studies, f"{inputs}_median", f"{inputs}_n")
     controls_first = first[is_control.loc[first].values]
     P = P.loc[:, P.loc[controls_first].notna().mean() >= C.MIN_PRESENT]
     organs = list(P.columns)
@@ -67,8 +74,8 @@ def load_cohort(manifest: pd.DataFrame, organ_stats: pd.DataFrame, *, target: st
         index="study_id", columns="organ", values="lesion_ml").reindex(index=studies, columns=organs).fillna(0)
 
     # reference regions (Section 2.4): liver (liver itself -> aorta) and aortic blood pool
-    # (blood-pool organs and heart -> liver); reference uptake is the lesion-cleaned mean
-    M = _pivot(organ_stats, studies, C.REF_FEATURE, "clean_n")
+    # (blood-pool organs and heart -> liver); reference uptake is the mean of the same input masks
+    M = _pivot(organ_stats, studies, f"{inputs}_mean", f"{inputs}_n")
     liver, aorta = M.get("liver"), M.get("aorta")
     blood = set(C.SYSTEMS["blood"]) | {"heart"}
     refs = {"raw": {o: 0.0 for o in organs},
@@ -77,3 +84,8 @@ def load_cohort(manifest: pd.DataFrame, organ_stats: pd.DataFrame, *, target: st
     return Cohort(studies=studies, first=first, is_control=is_control, diagnosis=dx,
                   patient_id=man.loc[studies, "patient_id"], covariates=cov, P=P, T=T, lesion_ml=les,
                   refs=refs, organs=organs)
+
+
+def global_uptake(d: Cohort, o: str) -> pd.Series:
+    """Mean log uptake of the other organs (M1 predictor; available organs only)."""
+    return d.P.drop(columns=[o]).mean(axis=1, skipna=True)

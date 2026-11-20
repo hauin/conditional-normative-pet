@@ -4,18 +4,21 @@ from __future__ import annotations
 import numpy as np
 
 # ------------------------------------------------------------------ analysis constants
-PRED_FEATURE = "clean_median"   # predictors: eroded, lesion-cleaned median SUV of the other organs
+# Inputs of the models. 'eroded' (main analysis): median / mean SUV of the organ masks eroded by
+# 4 mm, which needs no lesion labels. 'clean': the eroded masks minus the dilated manual lesions
+# (needs lesion labels; used to show how little the label-free inputs lose).
+INPUTS = "eroded"
 TARGET = "full_max"             # scored feature: SUVmax on the full mask (lesion voxels included)
-REF_FEATURE = "clean_mean"      # reference uptake for liver / blood-pool referencing
-EXCLUDE = {"bladder", "prostate", "gallbladder"}   # excretion, sex-specific, often removed
-MIN_PRESENT = 0.90              # organ kept if it has a usable clean value in >= 90% of controls
+EXCLUDE = {"bladder", "prostate", "gallbladder"}   # urinary excretion, present in men only, often removed
+MIN_PRESENT = 0.90              # organ kept if it has a usable input value in >= 90% of controls
 MIN_VOX = 20                    # masks with fewer voxels are treated as missing
-MIN_LESION_ML = 2.0             # lesion-bearing organ: >= 2 ml of manually segmented lesion
+MIN_LESION_ML = 2.0             # lesion-bearing organ: >= 2 ml of manually segmented lesion (evaluation only)
 MIN_TRAIN = 30                  # minimum training rows per organ and fold
 ALPHAS = np.logspace(-3, 3, 13) # ridge penalty grid, selected by efficient leave-one-out CV (RidgeCV)
 LOG_FLOOR = 0.05                # SUV floor before taking the log
 ERODE_MM = 4.0                  # erosion of organ masks and dilation of lesions
 DOME_MM = 15.0                  # liver-dome misregistration index
+FLAG_Z = 2.5                    # two-pass procedure: predictor values with z above this are hidden
 VAR_SHRINK = 0.5                # lambda: shrinkage of the log-variance prediction toward its mean
 LOG_CHI2_1_MEAN = -1.2704       # E[log chi2_1], bias of log squared residuals
 

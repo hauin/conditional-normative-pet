@@ -1,7 +1,8 @@
 """Run the analysis on simulated organ tables (no imaging data needed).
 
-Organ uptake is generated from a shared systemic factor, compartment factors and an
-organ-specific term, so that the patient's other organs carry information about the expected
+Organ uptake is generated from a shared systemic factor, a second factor with organ-specific
+signs (e.g. myocardial and muscle uptake rising together while hepatic uptake falls), compartment
+factors and an organ-specific term, so that the patient's other organs carry information about the expected
 uptake of each organ. Lesions raise SUVmax in some organs of patients. The demo writes tables in
 the same format as scripts/extract_features.py and runs scripts/run_analysis.py on them.
 
@@ -23,6 +24,7 @@ ORGANS = {   # organ: (compartment factor, loading on the systemic factor)
     "pelvis": ("bone", 0.3), "ribs": ("bone", 0.3), "autochthon": ("muscle", 0.4), "gluteal": ("muscle", 0.4),
     "stomach": ("gi", 0.2), "colon": ("gi", 0.2),
 }
+INSULIN = {"heart": 0.9, "autochthon": 0.5, "gluteal": 0.5, "liver": -0.3, "spleen": -0.2}
 
 
 def simulate(n_patients=800, frac_controls=0.45, seed=1):
@@ -31,6 +33,7 @@ def simulate(n_patients=800, frac_controls=0.45, seed=1):
     sex = rng.integers(0, 2, n_patients)
     control = rng.random(n_patients) < frac_controls
     systemic = rng.normal(0, 0.25, n_patients)
+    insulin = rng.normal(0, 0.3, n_patients)
     comp = {c: rng.normal(0, 0.15, n_patients) for c in {v[0] for v in ORGANS.values() if v[0]}}
     man = pd.DataFrame({"study_id": [f"P{i:04d}__S1" for i in range(n_patients)],
                         "patient_id": [f"P{i:04d}" for i in range(n_patients)],
@@ -39,14 +42,18 @@ def simulate(n_patients=800, frac_controls=0.45, seed=1):
     rows = []
     for o, (c, load) in ORGANS.items():
         base = np.log(2.0) + 0.002 * (age - 55) + 0.03 * sex
-        clean = base + load * systemic + (comp[c] if c else 0) + rng.normal(0, 0.08, n_patients)
+        clean = base + load * systemic + INSULIN.get(o, 0.0) * insulin + (comp[c] if c else 0) \
+            + rng.normal(0, 0.08, n_patients)
         full_max = clean + np.log(1.6) + rng.normal(0, 0.10, n_patients)
         lesion = np.where(~control & (rng.random(n_patients) < 0.12), rng.gamma(2, 3, n_patients), 0.0)
         full_max = full_max + np.where(lesion >= 2, rng.gamma(2, 0.25, n_patients), 0)
         for i in range(n_patients):
+            # eroded masks keep a little lesion uptake (label-free inputs); clean masks remove it
+            eroded = clean[i] + (0.05 * min(lesion[i], 10) / 10 if lesion[i] > 0 else 0.0)
             rows.append({"study_id": man.study_id[i], "organ": o, "truncated": False, "lesion_ml": lesion[i],
-                         "full_n": 500, "clean_n": 300, "full_max": np.exp(full_max[i]),
-                         "full_p90": np.exp(clean[i] + 0.2), "clean_median": np.exp(clean[i]),
+                         "full_n": 500, "eroded_n": 320, "clean_n": 300, "full_max": np.exp(full_max[i]),
+                         "full_p90": np.exp(clean[i] + 0.2), "eroded_median": np.exp(eroded),
+                         "eroded_mean": np.exp(eroded + 0.02), "clean_median": np.exp(clean[i]),
                          "clean_mean": np.exp(clean[i] + 0.02)})
     return man, pd.DataFrame(rows)
 
@@ -58,5 +65,5 @@ if __name__ == "__main__":
     man.to_csv(out / "manifest.csv", index=False)
     stats.to_csv(out / "organ_stats.csv", index=False)
     subprocess.run([sys.executable, str(HERE.parent / "scripts" / "run_analysis.py"), "--data", str(out),
-                    "--methods", "raw,liver_ref,marg_lin,cond_lin,cond_lin_het", "--n_boot", "200",
+                    "--methods", "raw,liver_ref,marg_lin,glob_lin,cond_lin,cond_lin_het", "--n_boot", "200",
                     "--n_rep", "3"], check=True)

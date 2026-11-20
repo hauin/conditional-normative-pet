@@ -1,4 +1,4 @@
-"""Finer organ units (Sections 2.10 and 3.12 of the paper).
+"""Finer organ units (Sections 2.11 and 3.12 of the paper).
 
 Schemes
   base  the organ groups of config.GROUP_RULES

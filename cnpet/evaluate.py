@@ -1,8 +1,13 @@
-"""Evaluation (Sections 2.5 and 2.8): detection, calibration, repeat-scan behavior."""
+"""Evaluation (Section 2.5 and the secondary analyses): detection, false-positive organs per
+patient, calibration (overall, by predicted SD, upper tail, empirical), repeat-scan behavior.
+
+The FPR is read at 90% sensitivity for the pooled comparisons; false positives per patient are
+summarized at 80% sensitivity (and 50-90%), with thresholds cross-fitted over patient folds."""
 from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+from scipy import stats
 from scipy.stats import rankdata
 
 from . import config as C
@@ -99,7 +104,91 @@ def calibration(Z: pd.DataFrame, methods, het_method="cond_lin_het"):
     return pd.concat([cal, byq], axis=1).reindex([m for m in methods if m in cal.index])
 
 
-# ------------------------------------------------------------------ repeat scans (Section 2.8)
+def fold_of(d) -> pd.Series:
+    """Patient-level fold of every study (the folds of model.patient_folds)."""
+    from .model import patient_folds
+    f = pd.Series(-1, index=d.studies)
+    for k, (_, te) in enumerate(patient_folds(d)):
+        f.loc[te] = k
+    return f
+
+
+def fp_per_patient(Z: pd.DataFrame, methods, fold: pd.Series, *, sens_levels=(0.5, 0.7, 0.8, 0.9),
+                   min_ml=C.MIN_LESION_ML):
+    """Lesion-free organs flagged per patient at fixed sensitivity. Each fold's threshold is set on
+    the lesion-bearing organs of the other folds (cross-fitted). Returns the summary table and the
+    per-patient counts {(method, sensitivity): Series}."""
+    W = wide(Z, methods)
+    pat = W[W.diagnosis != "NEGATIVE"].copy()
+    pat = pat[(pat.lesion_ml >= min_ml) | (pat.lesion_ml == 0)]
+    pat["fold"] = fold.loc[pat.study_id].values
+    is_pos = (pat.lesion_ml >= min_ml).values
+    ids = pat.study_id.unique()
+    rows, per_pt = [], {}
+    for m in methods:
+        for sens in sens_levels:
+            thr = pd.Series(np.nan, index=pat.index)
+            for k in pat.fold.unique():
+                thr[pat.fold == k] = np.quantile(pat[m].values[(pat.fold != k).values & is_pos], 1 - sens)
+            hit = pat[m] >= thr
+            fp = hit[~is_pos].groupby(pat.study_id[~is_pos]).sum().reindex(ids).fillna(0)
+            per_pt[(m, sens)] = fp
+            rows.append({"method": m, "target_sens": sens, "achieved_sens": hit[is_pos].mean(),
+                         "FP_organs_per_patient": fp.mean(), "pct_patients_0FP": 100 * (fp == 0).mean()})
+    return pd.DataFrame(rows), per_pt
+
+
+def paired_fp(per_pt: dict, a: str, b: str, n_boot=1000, seed=0) -> pd.DataFrame:
+    """Per-patient difference in false-positive organs (b - a), with a patient bootstrap CI and the
+    share of patients with fewer, the same or more false positives."""
+    rng = np.random.default_rng(seed)
+    rows = []
+    for (m, sens), x_b in per_pt.items():
+        if m != b or (a, sens) not in per_pt:
+            continue
+        x = (x_b - per_pt[(a, sens)]).dropna()
+        bs = [x.values[rng.integers(0, len(x), len(x))].mean() for _ in range(n_boot)]
+        rows.append({"target_sens": sens, "method": b, "vs": a, "mean_diff": x.mean(),
+                     "lo": np.percentile(bs, 2.5), "hi": np.percentile(bs, 97.5), "pct_fewer": 100 * (x < 0).mean(),
+                     "pct_same": 100 * (x == 0).mean(), "pct_more": 100 * (x > 0).mean()})
+    return pd.DataFrame(rows)
+
+
+def tail_calibration(Z: pd.DataFrame, methods, tails=(1.645, 1.96, 2.326, 2.576)) -> pd.DataFrame:
+    """One-sided exceedance in control organs (nominal 5, 2.5, 1, 0.5%). Log SUVmax is a maximum, so
+    its deviations are right-skewed and the upper tail can exceed the nominal rate even when the
+    two-sided rate is close to 5%."""
+    neg = Z[(Z.diagnosis == "NEGATIVE") & Z.z.notna() & Z.method.isin(methods)]
+    rows = []
+    for m, g in neg.groupby("method"):
+        r = {"method": m, "abs_z_gt_1.96_pct": 100 * (g.z.abs() > 1.96).mean(),
+             "skew_median_by_organ": g.groupby("organ").z.apply(stats.skew).median()}
+        for t in tails:
+            r[f"z_gt_{t}_pct (nominal {100 * stats.norm.sf(t):.1f})"] = 100 * (g.z > t).mean()
+        rows.append(r)
+    return pd.DataFrame(rows)
+
+
+def empirical_calibration(Z: pd.DataFrame, fold: pd.Series) -> pd.DataFrame:
+    """Cross-fitted empirical calibration: each z is converted to an upper-tail p value against the
+    out-of-fold control scores of the same organ in the other folds, p = (1 + n_ge) / (n + 2), and
+    back to a standard-normal quantile. Methods are renamed <method>_emp."""
+    Z = Z.copy()
+    Z["fold"] = fold.loc[Z.study_id].values
+    out = []
+    for (m, o), g in Z[Z.z.notna()].groupby(["method", "organ"]):
+        ctrl = g[g.diagnosis == "NEGATIVE"]
+        ze = pd.Series(np.nan, index=g.index)
+        for k in g.fold.unique():
+            ref = np.sort(ctrl.z[ctrl.fold != k].values)
+            x = g.z[g.fold == k].values
+            n_ge = len(ref) - np.searchsorted(ref, x, side="left")
+            ze[g.fold == k] = stats.norm.isf((1 + n_ge) / (len(ref) + 2))
+        out.append(g.assign(z=ze.values, method=m + "_emp"))
+    return pd.concat(out).drop(columns="fold")
+
+
+# ------------------------------------------------------------------ repeat scans
 def icc_c1(x, y):
     """ICC(C,1): two-way, consistency, single measurement."""
     a = np.c_[x, y]
